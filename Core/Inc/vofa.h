@@ -15,11 +15,12 @@
  *   3: ic          (phase C current, A)
  *   4: id          (d-axis current, A)
  *   5: iq          (q-axis current, A)
- *   6: vd          (d-axis voltage, V)
- *   7: vq          (q-axis voltage, V)
+ *   6: duty_a      (phase A duty cycle, 0~1)
+ *   7: duty_b      (phase B duty cycle, 0~1)
+ *   8: duty_c      (phase C duty cycle, 0~1)
  */
 
-#define VOFA_NUM_CHANNELS  8
+#define VOFA_NUM_CHANNELS  9
 #define VOFA_FRAME_SIZE    ((VOFA_NUM_CHANNELS * 4) + 4)  /* floats + tail */
 
 /* Call from TIM1 ISR (20kHz). Decimates internally to fit UART bandwidth. */

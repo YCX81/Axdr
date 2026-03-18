@@ -8,7 +8,7 @@
 - AS5600 磁编码器（软件 I2C）
 - 电流环 PI 闭环控制
 - 开环、电压、电流三种运行模式
-- VOFA+ JustFloat 调试输出（USB CDC，10kHz 采样率）
+- VOFA+ JustFloat 调试输出（USB CDC，20kHz 采样率）
 - CCMRAM 优化（LUT + FOC 状态零等待访问）
 
 ## 硬件参数
@@ -114,14 +114,16 @@ main()
   ├── 3. FOC 控制器初始化 (foc_ctrl_init)
   │
   ├── 4. ADC 校准 + 零电流偏移校准 (foc_ctrl_calibrate_offsets)
-  │      采集 64 次 ADC 值取平均作为零电流基准
+  │      临时切换 ADC 注入组为软件触发（TIM1 尚未启动）
+  │      采集 64 次 ADC 值取平均作为零电流基准（~2048）
   │
   ├── 5. 编码器零点校准
   │      施加 Vα=15%Vbus, Vβ=0 → 转子对齐到 d 轴 (θ_elec=0)
   │      等待 1s 稳定后读取编码器原始值作为零偏移
   │
   ├── 6. 启动 FOC (foc_ctrl_start)
-  │      开启 TIM1 PWM (CH1/2/3 + 互补) + CH4 ADC 触发
+  │      开启 TIM1 PWM (CH1/2/3 + 互补)
+  │      设置 CH4 CCR = Period-1，在计数器峰值触发 ADC 采样
   │      开启 ADC 注入转换 + TIM1 更新中断
   │
   └── 7. 主循环
@@ -136,7 +138,13 @@ main()
 
 ### SVPWM 实现
 
-采用 min-max 零序注入法，与传统扇区查表法数学等价，但无分支、代码更简洁：
+采用 min-max 零序注入法，与传统扇区查表法数学等价，但无分支、代码更简洁。
+
+**SVPWM 马鞍波实测波形（VOFA+ 采集）：**
+
+![SVPWM 马鞍波](docs/images/svpwm_saddle_wave.png)
+
+> 三相占空比（duty_a/b/c）互差 120°，呈现典型的 SVPWM 马鞍波形。开环模式，10Hz / 30% Vbus。
 
 ```
 输入: vα, vβ (逆 Park 输出)
@@ -176,20 +184,21 @@ CCMRAM (0x10000000,  10KB): sin_lut (1KB) + g_foc (~120B)，CPU 独占
 
 ### VOFA+ 调试通道
 
-通过 USB CDC 以 JustFloat 二进制协议输出，10kHz 采样率：
+通过 USB CDC 以 JustFloat 二进制协议输出，20kHz 采样率（9 通道 × 4 字节 + 4 尾帧 = 40 字节/帧，~800 KB/s）：
 
-| 通道 | 变量 | 单位 |
-|------|------|------|
-| CH0 | theta_elec | rad |
-| CH1 | ia | A |
-| CH2 | ib | A |
-| CH3 | ic | A |
-| CH4 | id | A |
-| CH5 | iq | A |
-| CH6 | vd | V |
-| CH7 | vq | V |
+| 通道 | 变量 | 单位 | 说明 |
+|------|------|------|------|
+| CH0 | theta_elec | rad | 电角度 |
+| CH1 | ia | A | A 相电流 |
+| CH2 | ib | A | B 相电流 |
+| CH3 | ic | A | C 相电流 |
+| CH4 | id | A | d 轴电流 |
+| CH5 | iq | A | q 轴电流 |
+| CH6 | duty_a | 0~1 | A 相占空比 |
+| CH7 | duty_b | 0~1 | B 相占空比 |
+| CH8 | duty_c | 0~1 | C 相占空比 |
 
-VOFA+ 设置：协议选 JustFloat，连接 USB 虚拟串口。
+VOFA+ 设置：协议选 JustFloat，数据接口选串口，端口号选 USB CDC 虚拟串口。
 
 ## 构建
 

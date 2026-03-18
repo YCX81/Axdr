@@ -12,7 +12,7 @@
  * Decimation = 4  -> 5kHz output  -> 180 KB/s -> very safe
  * Decimation = 1  -> 20kHz output -> 720 KB/s -> near limit, may drop frames
  */
-#define VOFA_DECIMATION  2   /* 20kHz / 2 = 10kHz sample rate to VOFA+ */
+#define VOFA_DECIMATION  1   /* 20kHz output, ~720 KB/s (near USB FS limit) */
 
 /* JustFloat tail bytes: IEEE 754 representation of +Inf (0x7F800000) */
 static const uint8_t vofa_tail[4] = { 0x00, 0x00, 0x80, 0x7F };
@@ -40,8 +40,9 @@ void vofa_send_from_isr(void)
     p[3] = g_foc.ic;
     p[4] = g_foc.id;
     p[5] = g_foc.iq;
-    p[6] = g_foc.vd;
-    p[7] = g_foc.vq;
+    p[6] = g_foc.duty_a;
+    p[7] = g_foc.duty_b;
+    p[8] = g_foc.duty_c;
 
     /* Append JustFloat tail */
     memcpy(&vofa_buf[fill_idx][VOFA_NUM_CHANNELS * 4], vofa_tail, 4);

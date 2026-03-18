@@ -44,6 +44,9 @@ typedef struct {
     uint16_t adc_offset_b;
     uint16_t adc_offset_c;
 
+    /* SVPWM duty cycles (0.0~1.0, for debug output) */
+    float duty_a, duty_b, duty_c;
+
     /* Bus voltage */
     float v_bus;
 

@@ -41,21 +41,38 @@ void foc_ctrl_init(FocCtrl_t *foc)
 
 void foc_ctrl_calibrate_offsets(FocCtrl_t *foc)
 {
-    /* Sample ADC injected channels multiple times with PWM off to get zero-current offset */
+    /* Sample ADC injected channels with PWM off to get zero-current offset.
+     *
+     * JSQR is configured for TIM1_CH4 external trigger, but TIM1 is not
+     * running yet during calibration.  Temporarily clear JEXTEN bits so
+     * JADSTART triggers the conversion via software instead. */
+
     uint32_t sum_a = 0, sum_b = 0, sum_c = 0;
     const uint32_t n_samples = 64;
 
-    for (uint32_t i = 0; i < n_samples; i++) {
-        /* Trigger injected conversion manually */
-        HAL_ADCEx_InjectedStart(&hadc1);
-        HAL_ADCEx_InjectedPollForConversion(&hadc1, 10);
-
-        sum_a += HAL_ADCEx_InjectedGetValue(&hadc1, ADC_INJECTED_RANK_1);
-        sum_b += HAL_ADCEx_InjectedGetValue(&hadc1, ADC_INJECTED_RANK_2);
-        sum_c += HAL_ADCEx_InjectedGetValue(&hadc1, ADC_INJECTED_RANK_3);
-
-        HAL_ADCEx_InjectedStop(&hadc1);
+    /* Ensure ADC is enabled */
+    if (!(ADC1->CR & ADC_CR_ADEN)) {
+        ADC1->ISR = ADC_ISR_ADRDY;
+        ADC1->CR |= ADC_CR_ADEN;
+        while (!(ADC1->ISR & ADC_ISR_ADRDY)) { }
     }
+
+    /* Save JSQR and switch to software trigger */
+    uint32_t saved_jsqr = ADC1->JSQR;
+    ADC1->JSQR = saved_jsqr & ~ADC_JSQR_JEXTEN_Msk;
+
+    for (uint32_t i = 0; i < n_samples; i++) {
+        ADC1->CR |= ADC_CR_JADSTART;
+        while (!(ADC1->ISR & ADC_ISR_JEOS)) { }
+        ADC1->ISR = ADC_ISR_JEOS;
+
+        sum_a += (ADC1->JDR1 & 0xFFFFU);
+        sum_b += (ADC1->JDR2 & 0xFFFFU);
+        sum_c += (ADC1->JDR3 & 0xFFFFU);
+    }
+
+    /* Restore hardware trigger */
+    ADC1->JSQR = saved_jsqr;
 
     foc->adc_offset_a = (uint16_t)(sum_a / n_samples);
     foc->adc_offset_b = (uint16_t)(sum_b / n_samples);
@@ -168,6 +185,9 @@ void foc_ctrl_update(FocCtrl_t *foc)
         /* SVPWM */
         SvpwmOutput_t pwm = svpwm_calculate(foc->v_alpha, foc->v_beta, foc->v_bus);
         svpwm_apply(&pwm);
+        foc->duty_a = (float)pwm.ccr_a / (float)PWM_PERIOD;
+        foc->duty_b = (float)pwm.ccr_b / (float)PWM_PERIOD;
+        foc->duty_c = (float)pwm.ccr_c / (float)PWM_PERIOD;
         return;  /* skip common path below */
     }
 
@@ -183,6 +203,9 @@ void foc_ctrl_update(FocCtrl_t *foc)
     /* SVPWM */
     SvpwmOutput_t pwm = svpwm_calculate(foc->v_alpha, foc->v_beta, foc->v_bus);
     svpwm_apply(&pwm);
+    foc->duty_a = (float)pwm.ccr_a / (float)PWM_PERIOD;
+    foc->duty_b = (float)pwm.ccr_b / (float)PWM_PERIOD;
+    foc->duty_c = (float)pwm.ccr_c / (float)PWM_PERIOD;
 }
 
 void foc_ctrl_start(FocCtrl_t *foc)
@@ -195,7 +218,10 @@ void foc_ctrl_start(FocCtrl_t *foc)
     HAL_TIMEx_PWMN_Start(&htim1, TIM_CHANNEL_2);
     HAL_TIMEx_PWMN_Start(&htim1, TIM_CHANNEL_3);
 
-    /* CH4 for ADC trigger */
+    /* CH4 for ADC trigger — set compare value near counter peak so ADC samples
+     * at PWM center (all low-side FETs ON, best current measurement point).
+     * Period = 4000, so CCR4 = Period - 1 triggers on the falling edge at peak. */
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, htim1.Init.Period - 1);
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
 
     /* Start ADC injected conversion (triggered by TIM1_CH4) */

@@ -59,7 +59,6 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-static uint32_t vofa_tick = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -158,9 +157,9 @@ int main(void)
   HAL_TIMEx_PWMN_Stop(&htim1, TIM_CHANNEL_2);
   HAL_TIMEx_PWMN_Stop(&htim1, TIM_CHANNEL_3);
 
-  /* Start FOC in voltage mode — debug ADC current readings first */
-  foc_ctrl_set_mode(&g_foc, FOC_MODE_VOLTAGE);
-  foc_ctrl_set_open_loop(&g_foc, 0.0f, 0.15f);  /* 15% Vbus, stationary */
+  /* Start FOC in open-loop mode for smooth waveform demo */
+  foc_ctrl_set_mode(&g_foc, FOC_MODE_OPEN_LOOP);
+  foc_ctrl_set_open_loop(&g_foc, 10.0f, 0.30f);  /* 10Hz, 30% Vbus */
   foc_ctrl_start(&g_foc);
 
   /* USER CODE END 2 */
@@ -175,21 +174,7 @@ int main(void)
     /* Read encoder in main loop */
     as5600_update(&g_encoder);
 
-    /* Send debug data to VOFA+ every 10ms */
-    if (HAL_GetTick() - vofa_tick >= 10) {
-      vofa_tick = HAL_GetTick();
-      char buf[120];
-      int elec_deg = (int)(g_encoder.angle_rad * 57.2957795f);
-      int ia_ma = (int)(g_foc.ia * 1000.0f);   /* mA */
-      int ib_ma = (int)(g_foc.ib * 1000.0f);   /* mA */
-      int id_ma = (int)(g_foc.id * 1000.0f);   /* mA */
-      int iq_ma = (int)(g_foc.iq * 1000.0f);   /* mA */
-      int off_a = (int)g_foc.adc_offset_a;
-      int off_b = (int)g_foc.adc_offset_b;
-      int len = snprintf(buf, sizeof(buf), "%d,%d,%d,%d,%d,%d,%d\n",
-                         elec_deg, ia_ma, ib_ma, id_ma, iq_ma, off_a, off_b);
-      HAL_UART_Transmit(&huart3, (uint8_t *)buf, (uint16_t)len, 5);
-    }
+    /* VOFA+ debug output now handled via USB CDC in TIM1 ISR (vofa_send_from_isr) */
   }
   /* USER CODE END 3 */
 }
@@ -247,6 +232,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   if (htim->Instance == TIM1) {
     foc_ctrl_update(&g_foc);
+    vofa_send_from_isr();
   }
 }
 
