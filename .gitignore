@@ -1,0 +1,12 @@
+build/
+mx.scratch
+*.o
+*.d
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+.cache/
+.vscode/
+.claude/
