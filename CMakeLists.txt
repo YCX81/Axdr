@@ -48,16 +48,19 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/foc_math.c
     Core/Src/svpwm.c
     Core/Src/open_loop.c
-    Core/Src/soft_i2c.c
-    Core/Src/as5600.c
+    Core/Src/mt6835.c
     Core/Src/pid.c
     Core/Src/foc_ctrl.c
     Core/Src/vofa.c
+    Test/test_runner.c
+    Test/test_spi.c
+    Test/test_mt6835.c
 )
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
+    Test
 )
 
 # Add project symbols (macros)

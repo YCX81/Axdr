@@ -2,7 +2,7 @@
 #include "foc_config.h"
 #include "foc_math.h"
 #include "svpwm.h"
-#include "as5600.h"
+#include "mt6835.h"
 #include "tim.h"
 #include "adc.h"
 #include "main.h"
@@ -138,7 +138,7 @@ void foc_ctrl_update(FocCtrl_t *foc)
 
     case FOC_MODE_VOLTAGE:
         /* Encoder angle, fixed voltage, no current loop */
-        theta = as5600_get_electrical_angle(&g_encoder);
+        theta = mt6835_get_electrical_angle(&g_encoder);
         foc->theta_elec = theta;
         /* Also sample currents for debug (not used for control) */
         foc_read_currents(foc);
@@ -156,7 +156,7 @@ void foc_ctrl_update(FocCtrl_t *foc)
 
     case FOC_MODE_CURRENT: {
         /* Full FOC: encoder + current PI */
-        theta = as5600_get_electrical_angle(&g_encoder);
+        theta = mt6835_get_electrical_angle(&g_encoder);
         foc->theta_elec = theta;
 
         /* Read phase currents from ADC */

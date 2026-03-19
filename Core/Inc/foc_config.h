@@ -18,7 +18,7 @@
 
 /* ---- Voltage Sensing ---- */
 #define VBUS_DIVIDER_RATIO  21.0f       /* (10k+10k+1k)/1k */
-#define VBUS_DEFAULT        24.0f       /* Default bus voltage for open-loop */
+#define VBUS_DEFAULT        29.1f       /* Default bus voltage for open-loop */
 
 /* ---- Math Constants ---- */
 #define FOC_PI              3.14159265f

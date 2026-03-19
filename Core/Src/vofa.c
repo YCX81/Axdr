@@ -1,5 +1,6 @@
 #include "vofa.h"
 #include "foc_ctrl.h"
+#include "mt6835.h"
 #include "usbd_cdc_if.h"
 #include <string.h>
 
@@ -43,6 +44,8 @@ void vofa_send_from_isr(void)
     p[6] = g_foc.duty_a;
     p[7] = g_foc.duty_b;
     p[8] = g_foc.duty_c;
+    p[9]  = g_encoder.mechanical_rad;
+    p[10] = (float)g_encoder.raw_angle;
 
     /* Append JustFloat tail */
     memcpy(&vofa_buf[fill_idx][VOFA_NUM_CHANNELS * 4], vofa_tail, 4);

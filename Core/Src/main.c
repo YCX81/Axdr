@@ -34,9 +34,9 @@
 #include "svpwm.h"
 #include "open_loop.h"
 #include "foc_ctrl.h"
-#include "soft_i2c.h"
-#include "as5600.h"
+#include "mt6835.h"
 #include "vofa.h"
+#include "test_runner.h"
 #include <stdio.h>
 #include <string.h>
 /* USER CODE END Includes */
@@ -113,9 +113,14 @@ int main(void)
   MX_SPI3_Init();
   /* USER CODE BEGIN 2 */
 
-  /* Initialize software I2C and AS5600 encoder */
-  soft_i2c_init();
-  as5600_init(&g_encoder, 7);   /* pole_pairs: adjust to your motor */
+  /* Initialize MT6835 encoder via SPI1 */
+  mt6835_init(&g_encoder, 7);   /* pole_pairs: adjust to your motor */
+
+#ifdef ENABLE_TESTS
+  HAL_Delay(500);  /* wait for USB enumeration */
+  test_run_all();
+  while (1) { ; } /* halt after tests */
+#endif
 
   /* Initialize FOC controller */
   foc_ctrl_init(&g_foc);
@@ -146,8 +151,8 @@ int main(void)
   HAL_Delay(1000);
 
   /* Read encoder and set as zero offset */
-  as5600_update(&g_encoder);
-  as5600_set_zero(&g_encoder);
+  mt6835_update(&g_encoder);
+  mt6835_set_zero(&g_encoder);
 
   /* Stop calibration PWM */
   HAL_TIM_PWM_Stop(&htim1, TIM_CHANNEL_1);
@@ -159,7 +164,7 @@ int main(void)
 
   /* Start FOC in open-loop mode for smooth waveform demo */
   foc_ctrl_set_mode(&g_foc, FOC_MODE_OPEN_LOOP);
-  foc_ctrl_set_open_loop(&g_foc, 10.0f, 0.30f);  /* 10Hz, 30% Vbus */
+  foc_ctrl_set_open_loop(&g_foc, 10.0f, 0.15f);  /* 10Hz, 15% Vbus (~3.4W) */
   foc_ctrl_start(&g_foc);
 
   /* USER CODE END 2 */
@@ -172,7 +177,7 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     /* Read encoder in main loop */
-    as5600_update(&g_encoder);
+    mt6835_update(&g_encoder);
 
     /* VOFA+ debug output now handled via USB CDC in TIM1 ISR (vofa_send_from_isr) */
   }
