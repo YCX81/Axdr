@@ -13,7 +13,7 @@
  * Decimation = 4  -> 5kHz output  -> 180 KB/s -> very safe
  * Decimation = 1  -> 20kHz output -> 720 KB/s -> near limit, may drop frames
  */
-#define VOFA_DECIMATION  1   /* 20kHz output, ~720 KB/s (near USB FS limit) */
+#define VOFA_DECIMATION  4   /* 5kHz output, ~360 KB/s (safe for USB FS) */
 
 /* JustFloat tail bytes: IEEE 754 representation of +Inf (0x7F800000) */
 static const uint8_t vofa_tail[4] = { 0x00, 0x00, 0x80, 0x7F };
@@ -36,16 +36,25 @@ void vofa_send_from_isr(void)
     float *p = (float *)vofa_buf[fill_idx];
 
     p[0] = g_foc.theta_elec;
-    p[1] = g_foc.ia;
-    p[2] = g_foc.ib;
-    p[3] = g_foc.ic;
-    p[4] = g_foc.id;
-    p[5] = g_foc.iq;
-    p[6] = g_foc.duty_a;
-    p[7] = g_foc.duty_b;
-    p[8] = g_foc.duty_c;
-    p[9]  = g_encoder.mechanical_rad;
-    p[10] = (float)g_encoder.raw_angle;
+    p[1] = (float)g_foc.raw_adc_a;
+    p[2] = (float)g_foc.raw_adc_b;
+    p[3] = (float)g_foc.raw_adc_c;
+    p[4] = (float)g_foc.raw_adc_bus;
+    p[5] = (float)g_foc.adc_offset_a;
+    p[6] = (float)g_foc.adc_offset_b;
+    p[7] = (float)g_foc.adc_offset_c;
+    p[8] = (float)g_foc.adc_offset_bus;
+    p[9] = g_foc.ia;
+    p[10] = g_foc.ib;
+    p[11] = g_foc.ic;
+    p[12] = g_foc.ibus;
+    p[13] = g_foc.id;
+    p[14] = g_foc.iq;
+    p[15] = g_foc.duty_a;
+    p[16] = g_foc.duty_b;
+    p[17] = g_foc.duty_c;
+    p[18] = g_encoder.mechanical_rad;
+    p[19] = (float)g_encoder.raw_angle;
 
     /* Append JustFloat tail */
     memcpy(&vofa_buf[fill_idx][VOFA_NUM_CHANNELS * 4], vofa_tail, 4);

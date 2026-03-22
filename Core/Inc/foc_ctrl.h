@@ -23,9 +23,15 @@ typedef struct {
     float ol_amplitude;     /* Open-loop voltage amplitude (0~1) */
 
     /* Current feedback */
+    uint16_t raw_adc_a;
+    uint16_t raw_adc_b;
+    uint16_t raw_adc_c;
+    uint16_t raw_adc_bus;
     float ia, ib, ic;       /* Phase currents [A] */
+    float ibus;             /* Bus current [A] */
     float i_alpha, i_beta;  /* Clarke output */
     float id, iq;           /* Park output */
+    uint8_t current_filter_ready;
 
     /* Current reference */
     float id_ref;           /* D-axis current ref (normally 0) */
@@ -43,6 +49,7 @@ typedef struct {
     uint16_t adc_offset_a;
     uint16_t adc_offset_b;
     uint16_t adc_offset_c;
+    uint16_t adc_offset_bus;
 
     /* SVPWM duty cycles (0.0~1.0, for debug output) */
     float duty_a, duty_b, duty_c;

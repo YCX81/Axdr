@@ -32,4 +32,13 @@
 #define OPEN_LOOP_DEFAULT_AMPLITUDE 0.10f   /* 10% of Vbus */
 #define OPEN_LOOP_DT                (1.0f / (float)PWM_FREQ_HZ)
 
+/* ---- Motor Phase Sequence ---- */
+/* PWM phase order compensation for the inverter outputs.
+ * Keep this aligned with the actual motor power wiring so open-loop still spins. */
+#define MOTOR_PWM_BC_SWAP           1
+
+/* Current-sense channel compensation for ADC wiring.
+ * This only remaps measured phase-current channels and must match the schematic. */
+#define MOTOR_ADC_BC_SWAP           0
+
 #endif /* __FOC_CONFIG_H */

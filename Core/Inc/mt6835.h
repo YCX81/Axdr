@@ -10,6 +10,7 @@ typedef struct {
     float    mechanical_rad;    /* Mechanical angle in radians [0, 2*PI) */
     uint8_t  pole_pairs;        /* Motor pole pairs */
     uint32_t zero_offset;       /* Raw angle at electrical zero */
+    float    raw_to_elec;       /* Pre-computed: (2*PI / 2^21) * pole_pairs */
     bool     ready;             /* True if read succeeded */
 } MT6835_t;
 
@@ -20,7 +21,7 @@ void mt6835_init(MT6835_t *enc, uint8_t pole_pairs);
 void mt6835_set_zero(MT6835_t *enc);
 
 /* Read raw angle from sensor, update all fields.
- * Call this from main loop, NOT from ISR. */
+ * Called from TIM1 ISR at 20kHz — uses direct SPI register access. */
 bool mt6835_update(MT6835_t *enc);
 
 /* Get latest electrical angle (safe to call from ISR) */

@@ -11,12 +11,20 @@
 __attribute__((section(".ccmram")))
 FocCtrl_t g_foc = { 0 };
 
-/* Default PI gains (conservative starting point, tune on real motor) */
-#define PID_ID_KP   0.5f
-#define PID_ID_KI   0.01f
-#define PID_IQ_KP   0.5f
-#define PID_IQ_KI   0.01f
-#define PID_OUT_MAX 12.0f   /* Max voltage output [V] */
+/* PI gains — start very conservative, raise slowly while observing Iq on VOFA.
+ * Rule of thumb: Kp ≈ L / Ts, Ki ≈ R / Ts  (Ts = 50µs @ 20kHz)
+ * Without knowing exact L/R, use safe low values to avoid oscillation. */
+#define PID_ID_KP   0.020f
+#define PID_ID_KI   0.0004f
+#define PID_IQ_KP   0.020f
+#define PID_IQ_KI   0.0004f
+#define PID_OUT_MAX 5.0f    /* Limit voltage output to ~17% of 29V bus */
+#define CURRENT_FILTER_ALPHA 0.20f
+
+static inline float lpf1(float prev, float sample)
+{
+    return prev + CURRENT_FILTER_ALPHA * (sample - prev);
+}
 
 void foc_ctrl_init(FocCtrl_t *foc)
 {
@@ -34,6 +42,12 @@ void foc_ctrl_init(FocCtrl_t *foc)
     foc->adc_offset_a = ADC_MID_VALUE;
     foc->adc_offset_b = ADC_MID_VALUE;
     foc->adc_offset_c = ADC_MID_VALUE;
+    foc->adc_offset_bus = ADC_MID_VALUE;
+    foc->raw_adc_a = ADC_MID_VALUE;
+    foc->raw_adc_b = ADC_MID_VALUE;
+    foc->raw_adc_c = ADC_MID_VALUE;
+    foc->raw_adc_bus = ADC_MID_VALUE;
+    foc->current_filter_ready = 0;
 
     pid_init(&foc->pid_id, PID_ID_KP, PID_ID_KI, -PID_OUT_MAX, PID_OUT_MAX);
     pid_init(&foc->pid_iq, PID_IQ_KP, PID_IQ_KI, -PID_OUT_MAX, PID_OUT_MAX);
@@ -47,7 +61,7 @@ void foc_ctrl_calibrate_offsets(FocCtrl_t *foc)
      * running yet during calibration.  Temporarily clear JEXTEN bits so
      * JADSTART triggers the conversion via software instead. */
 
-    uint32_t sum_a = 0, sum_b = 0, sum_c = 0;
+    uint32_t sum_a = 0, sum_b = 0, sum_c = 0, sum_bus = 0;
     const uint32_t n_samples = 64;
 
     /* Ensure ADC is enabled */
@@ -66,9 +80,21 @@ void foc_ctrl_calibrate_offsets(FocCtrl_t *foc)
         while (!(ADC1->ISR & ADC_ISR_JEOS)) { }
         ADC1->ISR = ADC_ISR_JEOS;
 
-        sum_a += (ADC1->JDR1 & 0xFFFFU);
+        /* Schematic mapping:
+         *   PA2 / ADC1_IN3 -> Ia
+         *   PA1 / ADC1_IN2 -> Ib
+         *   PA0 / ADC1_IN1 -> Ic
+         * Injected ranks follow channel order 1,2,3 => JDR1=Ic, JDR2=Ib, JDR3=Ia.
+         */
+        sum_a += (ADC1->JDR3 & 0xFFFFU);
+#if MOTOR_ADC_BC_SWAP
+        sum_b += (ADC1->JDR1 & 0xFFFFU);
+        sum_c += (ADC1->JDR2 & 0xFFFFU);
+#else
         sum_b += (ADC1->JDR2 & 0xFFFFU);
-        sum_c += (ADC1->JDR3 & 0xFFFFU);
+        sum_c += (ADC1->JDR1 & 0xFFFFU);
+#endif
+        sum_bus += (ADC1->JDR4 & 0xFFFFU);
     }
 
     /* Restore hardware trigger */
@@ -77,6 +103,7 @@ void foc_ctrl_calibrate_offsets(FocCtrl_t *foc)
     foc->adc_offset_a = (uint16_t)(sum_a / n_samples);
     foc->adc_offset_b = (uint16_t)(sum_b / n_samples);
     foc->adc_offset_c = (uint16_t)(sum_c / n_samples);
+    foc->adc_offset_bus = (uint16_t)(sum_bus / n_samples);
 }
 
 void foc_ctrl_set_mode(FocCtrl_t *foc, FocMode_t mode)
@@ -85,6 +112,7 @@ void foc_ctrl_set_mode(FocCtrl_t *foc, FocMode_t mode)
         pid_reset(&foc->pid_id);
         pid_reset(&foc->pid_iq);
         foc->ol_theta = 0.0f;
+        foc->current_filter_ready = 0;
         foc->mode = mode;
     }
 }
@@ -105,15 +133,52 @@ void foc_ctrl_set_open_loop(FocCtrl_t *foc, float freq_hz, float amplitude)
 
 static inline void foc_read_currents(FocCtrl_t *foc)
 {
+    /* Wait for injected conversion to complete (JEOS = End Of Sequence).
+     * With RCR=1 the ISR fires at valley (~25µs after ADC trigger at peak),
+     * so JEOS should already be set.  The while loop is a safety net. */
+    while (!(ADC1->ISR & ADC_ISR_JEOS)) {}
+    ADC1->ISR = ADC_ISR_JEOS;  /* Clear flag (write-1-to-clear) */
+
     /* Direct register access — avoids HAL function call overhead in ISR.
      * JDRx registers hold injected conversion results. */
-    uint16_t raw_a = (uint16_t)(ADC1->JDR1 & 0xFFFFU);
+    /* Schematic mapping:
+     *   PA2 / ADC1_IN3 -> Ia
+     *   PA1 / ADC1_IN2 -> Ib
+     *   PA0 / ADC1_IN1 -> Ic
+     * Injected ranks follow channel order 1,2,3 => JDR1=Ic, JDR2=Ib, JDR3=Ia.
+     */
+    uint16_t raw_a = (uint16_t)(ADC1->JDR3 & 0xFFFFU);
+#if MOTOR_ADC_BC_SWAP
+    uint16_t raw_b = (uint16_t)(ADC1->JDR1 & 0xFFFFU);
+    uint16_t raw_c = (uint16_t)(ADC1->JDR2 & 0xFFFFU);
+#else
     uint16_t raw_b = (uint16_t)(ADC1->JDR2 & 0xFFFFU);
-    uint16_t raw_c = (uint16_t)(ADC1->JDR3 & 0xFFFFU);
+    uint16_t raw_c = (uint16_t)(ADC1->JDR1 & 0xFFFFU);
+#endif
+    uint16_t raw_bus = (uint16_t)(ADC1->JDR4 & 0xFFFFU);
 
-    foc->ia = ((float)raw_a - (float)foc->adc_offset_a) * ADC_SCALE;
-    foc->ib = ((float)raw_b - (float)foc->adc_offset_b) * ADC_SCALE;
-    foc->ic = ((float)raw_c - (float)foc->adc_offset_c) * ADC_SCALE;
+    foc->raw_adc_a = raw_a;
+    foc->raw_adc_b = raw_b;
+    foc->raw_adc_c = raw_c;
+    foc->raw_adc_bus = raw_bus;
+
+    float ia_sample = ((float)raw_a - (float)foc->adc_offset_a) * ADC_SCALE;
+    float ib_sample = ((float)raw_b - (float)foc->adc_offset_b) * ADC_SCALE;
+    float ic_sample = ((float)raw_c - (float)foc->adc_offset_c) * ADC_SCALE;
+    float ibus_sample = ((float)raw_bus - (float)foc->adc_offset_bus) * ADC_SCALE;
+
+    if (!foc->current_filter_ready) {
+        foc->ia = ia_sample;
+        foc->ib = ib_sample;
+        foc->ic = ic_sample;
+        foc->ibus = ibus_sample;
+        foc->current_filter_ready = 1;
+    } else {
+        foc->ia = lpf1(foc->ia, ia_sample);
+        foc->ib = lpf1(foc->ib, ib_sample);
+        foc->ic = lpf1(foc->ic, ic_sample);
+        foc->ibus = lpf1(foc->ibus, ibus_sample);
+    }
 }
 
 void foc_ctrl_update(FocCtrl_t *foc)
@@ -134,6 +199,16 @@ void foc_ctrl_update(FocCtrl_t *foc)
         foc->theta_elec = theta;
         foc->vd = 0.0f;
         foc->vq = foc->ol_amplitude * foc->v_bus;
+        /* Sample currents for monitoring (not used for control) */
+        foc_read_currents(foc);
+        {
+            AlphaBeta_t i_ab = clarke_transform(foc->ia, foc->ib, foc->ic);
+            foc->i_alpha = i_ab.alpha;
+            foc->i_beta  = i_ab.beta;
+            DQ_t i_dq = park_transform(foc->i_alpha, foc->i_beta, theta);
+            foc->id = lpf1(foc->id, i_dq.d);
+            foc->iq = lpf1(foc->iq, i_dq.q);
+        }
         break;
 
     case FOC_MODE_VOLTAGE:
@@ -147,8 +222,8 @@ void foc_ctrl_update(FocCtrl_t *foc)
             foc->i_alpha = i_ab.alpha;
             foc->i_beta  = i_ab.beta;
             DQ_t i_dq = park_transform(foc->i_alpha, foc->i_beta, theta);
-            foc->id = i_dq.d;
-            foc->iq = i_dq.q;
+            foc->id = lpf1(foc->id, i_dq.d);
+            foc->iq = lpf1(foc->iq, i_dq.q);
         }
         foc->vd = 0.0f;
         foc->vq = foc->ol_amplitude * foc->v_bus;
@@ -171,8 +246,8 @@ void foc_ctrl_update(FocCtrl_t *foc)
         foc_sincos(theta, &sin_t, &cos_t);
 
         /* Park: Ialpha, Ibeta -> Id, Iq */
-        foc->id =  foc->i_alpha * cos_t + foc->i_beta * sin_t;
-        foc->iq = -foc->i_alpha * sin_t + foc->i_beta * cos_t;
+        foc->id = lpf1(foc->id,  foc->i_alpha * cos_t + foc->i_beta * sin_t);
+        foc->iq = lpf1(foc->iq, -foc->i_alpha * sin_t + foc->i_beta * cos_t);
 
         /* PI controllers */
         foc->vd = pid_update(&foc->pid_id, foc->id_ref - foc->id);
@@ -221,7 +296,7 @@ void foc_ctrl_start(FocCtrl_t *foc)
     /* CH4 for ADC trigger — set compare value near counter peak so ADC samples
      * at PWM center (all low-side FETs ON, best current measurement point).
      * Period = 4000, so CCR4 = Period - 1 triggers on the falling edge at peak. */
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, htim1.Init.Period - 1);
+  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, htim1.Init.Period - 325);
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
 
     /* Start ADC injected conversion (triggered by TIM1_CH4) */

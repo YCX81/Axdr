@@ -53,6 +53,7 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
+#define IQ_STEP_HOLD_MS 3000U
 
 /* USER CODE END PM */
 
@@ -162,9 +163,14 @@ int main(void)
   HAL_TIMEx_PWMN_Stop(&htim1, TIM_CHANNEL_2);
   HAL_TIMEx_PWMN_Stop(&htim1, TIM_CHANNEL_3);
 
-  /* Start FOC in open-loop mode for smooth waveform demo */
-  foc_ctrl_set_mode(&g_foc, FOC_MODE_OPEN_LOOP);
-  foc_ctrl_set_open_loop(&g_foc, 10.0f, 0.15f);  /* 10Hz, 15% Vbus (~3.4W) */
+  /* ===== Step 1: VOLTAGE mode to verify encoder angle =====
+   * Motor should spin smoothly with constant torque.
+   * If it vibrates or stutters, the encoder angle direction is wrong.
+   * Once verified, switch to FOC_MODE_CURRENT for closed-loop. */
+  foc_ctrl_set_mode(&g_foc, FOC_MODE_CURRENT);
+  g_foc.ol_amplitude = 0.15f;  /* 15% Vbus: debug setting to push current above ADC noise floor */
+  g_foc.id_ref = 0.0f;
+  g_foc.iq_ref = 0.05f;   /* Start from the first step level for iq step-response testing */
   foc_ctrl_start(&g_foc);
 
   /* USER CODE END 2 */
@@ -176,8 +182,19 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    /* Read encoder in main loop */
-    mt6835_update(&g_encoder);
+    {
+      uint32_t step_idx = (HAL_GetTick() / IQ_STEP_HOLD_MS) % 3U;
+
+      if (step_idx == 0U) {
+        g_foc.iq_ref = 0.05f;
+      } else if (step_idx == 1U) {
+        g_foc.iq_ref = 0.10f;
+      } else {
+        g_foc.iq_ref = 0.15f;
+      }
+    }
+    /* Encoder is read in TIM1 ISR at 20kHz 鈥?do NOT call mt6835_update here
+     * to avoid SPI race condition with the ISR. */
 
     /* VOFA+ debug output now handled via USB CDC in TIM1 ISR (vofa_send_from_isr) */
   }
@@ -236,6 +253,7 @@ void SystemClock_Config(void)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   if (htim->Instance == TIM1) {
+    mt6835_update(&g_encoder);
     foc_ctrl_update(&g_foc);
     vofa_send_from_isr();
   }

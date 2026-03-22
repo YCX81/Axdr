@@ -2,6 +2,7 @@
 #include "spi.h"
 #include "main.h"
 #include "foc_config.h"
+#include <math.h>
 
 /* MT6835 SPI registers (12-bit address space) */
 #define MT6835_REG_ANGLE_H   0x003   /* ANGLE[20:13] */
@@ -11,26 +12,43 @@
 #define MT6835_CMD_READ      0x3U    /* 4-bit read opcode */
 #define MT6835_RAW_MAX       2097152.0f  /* 2^21 */
 
-#define MT6835_CS_LOW()   HAL_GPIO_WritePin(SPI1_CSN_GPIO_Port, SPI1_CSN_Pin, GPIO_PIN_RESET)
-#define MT6835_CS_HIGH()  HAL_GPIO_WritePin(SPI1_CSN_GPIO_Port, SPI1_CSN_Pin, GPIO_PIN_SET)
+/* Direct GPIO for CS — single BSRR write instead of HAL function call */
+#define MT6835_CS_LOW()   (GPIOD->BSRR = (uint32_t)SPI1_CSN_Pin << 16)
+#define MT6835_CS_HIGH()  (GPIOD->BSRR = SPI1_CSN_Pin)
+
+/* Pre-computed command bytes for the 3 angle registers (never change at runtime) */
+#define CMD_ANGLE_H_B0  ((uint8_t)((MT6835_CMD_READ << 4) | ((MT6835_REG_ANGLE_H >> 8) & 0x0F)))
+#define CMD_ANGLE_H_B1  ((uint8_t)(MT6835_REG_ANGLE_H & 0xFF))
+#define CMD_ANGLE_M_B0  ((uint8_t)((MT6835_CMD_READ << 4) | ((MT6835_REG_ANGLE_M >> 8) & 0x0F)))
+#define CMD_ANGLE_M_B1  ((uint8_t)(MT6835_REG_ANGLE_M & 0xFF))
+#define CMD_ANGLE_L_B0  ((uint8_t)((MT6835_CMD_READ << 4) | ((MT6835_REG_ANGLE_L >> 8) & 0x0F)))
+#define CMD_ANGLE_L_B1  ((uint8_t)(MT6835_REG_ANGLE_L & 0xFF))
 
 MT6835_t g_encoder = { 0 };
 
-/* Read one register via SPI (24-bit frame: 4-bit cmd | 12-bit addr | 8-bit data) */
-static uint8_t mt6835_read_reg(uint16_t reg)
+/* Direct SPI byte transfer — no HAL overhead */
+static inline uint8_t spi1_txrx_byte(uint8_t tx)
 {
-    uint8_t tx[3] = {
-        (uint8_t)((MT6835_CMD_READ << 4) | ((reg >> 8) & 0x0F)),
-        (uint8_t)(reg & 0xFF),
-        0x00
-    };
-    uint8_t rx[3] = { 0 };
+    /* Wait for TX buffer empty */
+    while (!(SPI1->SR & SPI_SR_TXE)) {}
+    /* Write as 8-bit to avoid 16-bit packing issues */
+    *(volatile uint8_t *)&SPI1->DR = tx;
+    /* Wait for RX data ready */
+    while (!(SPI1->SR & SPI_SR_RXNE)) {}
+    return *(volatile uint8_t *)&SPI1->DR;
+}
 
+/* Read one register: 3-byte SPI frame (cmd+addr | data) */
+static inline uint8_t mt6835_read_reg_fast(uint8_t b0, uint8_t b1)
+{
     MT6835_CS_LOW();
-    HAL_SPI_TransmitReceive(&hspi1, tx, rx, 3, 10);
+    (void)spi1_txrx_byte(b0);
+    (void)spi1_txrx_byte(b1);
+    uint8_t val = spi1_txrx_byte(0x00);
+    /* Wait for SPI idle before releasing CS */
+    while (SPI1->SR & SPI_SR_BSY) {}
     MT6835_CS_HIGH();
-
-    return rx[2];
+    return val;
 }
 
 void mt6835_init(MT6835_t *enc, uint8_t pole_pairs)
@@ -42,8 +60,19 @@ void mt6835_init(MT6835_t *enc, uint8_t pole_pairs)
     enc->mechanical_rad = 0.0f;
     enc->ready = false;
 
+    /* Pre-compute raw-to-electrical-angle scale factor */
+    enc->raw_to_elec = (FOC_2PI / MT6835_RAW_MAX) * (float)pole_pairs;
+
     /* Ensure CS starts deasserted */
     MT6835_CS_HIGH();
+
+    /* Enable SPI1 peripheral (HAL_SPI_Init does NOT set SPE) */
+    SPI1->CR1 |= SPI_CR1_SPE;
+
+    /* Drain any stale RX data to prevent RXNE stuck */
+    while (SPI1->SR & SPI_SR_RXNE) {
+        (void)*(volatile uint8_t *)&SPI1->DR;
+    }
 }
 
 void mt6835_set_zero(MT6835_t *enc)
@@ -55,9 +84,9 @@ void mt6835_set_zero(MT6835_t *enc)
 
 bool mt6835_update(MT6835_t *enc)
 {
-    uint8_t h = mt6835_read_reg(MT6835_REG_ANGLE_H);
-    uint8_t m = mt6835_read_reg(MT6835_REG_ANGLE_M);
-    uint8_t l = mt6835_read_reg(MT6835_REG_ANGLE_L);
+    uint8_t h = mt6835_read_reg_fast(CMD_ANGLE_H_B0, CMD_ANGLE_H_B1);
+    uint8_t m = mt6835_read_reg_fast(CMD_ANGLE_M_B0, CMD_ANGLE_M_B1);
+    uint8_t l = mt6835_read_reg_fast(CMD_ANGLE_L_B0, CMD_ANGLE_L_B1);
 
     /* Assemble 21-bit raw angle: H[7:0]=bit20..13, M[7:0]=bit12..5, L[7:3]=bit4..0 */
     uint32_t raw = ((uint32_t)h << 13) | ((uint32_t)m << 5) | (l >> 3);
@@ -66,17 +95,17 @@ bool mt6835_update(MT6835_t *enc)
     /* Mechanical angle */
     enc->mechanical_rad = (float)raw * (FOC_2PI / MT6835_RAW_MAX);
 
-    /* Electrical angle = (zero_offset - raw) * pole_pairs (reversed direction) */
-    int32_t offset_raw = (int32_t)enc->zero_offset - (int32_t)raw;
+    /* Electrical angle = (zero_offset - raw) * pole_pairs */
+     int32_t offset_raw = (int32_t)enc->zero_offset - (int32_t)raw;
     if (offset_raw < 0) {
         offset_raw += 2097152;
     }
 
-    float e_angle = (float)offset_raw * (FOC_2PI / MT6835_RAW_MAX) * (float)enc->pole_pairs;
+    float e_angle = (float)offset_raw * enc->raw_to_elec;
 
-    /* Wrap to [0, 2*PI) */
-    while (e_angle >= FOC_2PI) e_angle -= FOC_2PI;
-    while (e_angle < 0.0f)    e_angle += FOC_2PI;
+    /* Wrap to [0, 2*PI) — fmodf avoids multi-iteration while loop */
+    e_angle = fmodf(e_angle, FOC_2PI);
+    if (e_angle < 0.0f) e_angle += FOC_2PI;
 
     enc->angle_rad = e_angle;
     enc->ready = true;

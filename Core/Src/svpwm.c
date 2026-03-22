@@ -1,6 +1,7 @@
 #include "svpwm.h"
 #include "foc_config.h"
 #include "tim.h"
+#include <stdint.h>
 
 /*
  * SVPWM implementation using min-max zero-sequence injection.
@@ -88,7 +89,13 @@ SvpwmOutput_t svpwm_calculate(float v_alpha, float v_beta, float v_bus)
 
 void svpwm_apply(const SvpwmOutput_t *output)
 {
+#if MOTOR_PWM_BC_SWAP
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, output->ccr_a);
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, output->ccr_c);
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, output->ccr_b);
+#else
     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, output->ccr_a);
     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, output->ccr_b);
     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, output->ccr_c);
+#endif
 }
