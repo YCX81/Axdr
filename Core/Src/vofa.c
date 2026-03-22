@@ -6,12 +6,11 @@
 
 /*
  * USB CDC FS throughput: ~800 KB/s practical
- *   Frame size = 8 channels * 4 bytes + 4 tail = 36 bytes
- *   Max frame rate = 800000 / 36 ≈ 22000 fps
+ *   Frame size = 20 channels * 4 bytes + 4 tail = 84 bytes
+ *   Max frame rate = 800000 / 84 ≈ 9500 fps
  *
- * Decimation = 2  -> 10kHz output -> 360 KB/s -> comfortable
- * Decimation = 4  -> 5kHz output  -> 180 KB/s -> very safe
- * Decimation = 1  -> 20kHz output -> 720 KB/s -> near limit, may drop frames
+ * Decimation = 4  -> 5kHz output  -> 420 KB/s -> safe
+ * Decimation = 2  -> 10kHz output -> 840 KB/s -> near limit
  */
 #define VOFA_DECIMATION  4   /* 5kHz output, ~360 KB/s (safe for USB FS) */
 

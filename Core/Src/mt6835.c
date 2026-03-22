@@ -96,7 +96,7 @@ bool mt6835_update(MT6835_t *enc)
     enc->mechanical_rad = (float)raw * (FOC_2PI / MT6835_RAW_MAX);
 
     /* Electrical angle = (zero_offset - raw) * pole_pairs */
-     int32_t offset_raw = (int32_t)enc->zero_offset - (int32_t)raw;
+    int32_t offset_raw = (int32_t)enc->zero_offset - (int32_t)raw;
     if (offset_raw < 0) {
         offset_raw += 2097152;
     }

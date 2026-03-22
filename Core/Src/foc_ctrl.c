@@ -293,10 +293,9 @@ void foc_ctrl_start(FocCtrl_t *foc)
     HAL_TIMEx_PWMN_Start(&htim1, TIM_CHANNEL_2);
     HAL_TIMEx_PWMN_Start(&htim1, TIM_CHANNEL_3);
 
-    /* CH4 for ADC trigger — set compare value near counter peak so ADC samples
-     * at PWM center (all low-side FETs ON, best current measurement point).
-     * Period = 4000, so CCR4 = Period - 1 triggers on the falling edge at peak. */
-  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, htim1.Init.Period - 325);
+    /* CH4 for ADC trigger — offset 325 counts (~2µs) before counter peak
+     * to sample after switching noise settles while low-side FETs are ON. */
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, htim1.Init.Period - 325);
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
 
     /* Start ADC injected conversion (triggered by TIM1_CH4) */

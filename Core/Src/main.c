@@ -163,14 +163,10 @@ int main(void)
   HAL_TIMEx_PWMN_Stop(&htim1, TIM_CHANNEL_2);
   HAL_TIMEx_PWMN_Stop(&htim1, TIM_CHANNEL_3);
 
-  /* ===== Step 1: VOLTAGE mode to verify encoder angle =====
-   * Motor should spin smoothly with constant torque.
-   * If it vibrates or stutters, the encoder angle direction is wrong.
-   * Once verified, switch to FOC_MODE_CURRENT for closed-loop. */
+  /* Current closed-loop mode with Iq step-response test */
   foc_ctrl_set_mode(&g_foc, FOC_MODE_CURRENT);
-  g_foc.ol_amplitude = 0.15f;  /* 15% Vbus: debug setting to push current above ADC noise floor */
   g_foc.id_ref = 0.0f;
-  g_foc.iq_ref = 0.05f;   /* Start from the first step level for iq step-response testing */
+  g_foc.iq_ref = 0.05f;
   foc_ctrl_start(&g_foc);
 
   /* USER CODE END 2 */
@@ -193,7 +189,7 @@ int main(void)
         g_foc.iq_ref = 0.15f;
       }
     }
-    /* Encoder is read in TIM1 ISR at 20kHz 鈥?do NOT call mt6835_update here
+    /* Encoder is read in TIM1 ISR at 20kHz — do NOT call mt6835_update here
      * to avoid SPI race condition with the ISR. */
 
     /* VOFA+ debug output now handled via USB CDC in TIM1 ISR (vofa_send_from_isr) */
